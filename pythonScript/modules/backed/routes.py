@@ -6,19 +6,29 @@ from keras import backend as k
 import numpy as np
 import tensorflow as tf
 from PIL import Image
-from keras.applications.resnet50 import ResNet50,decode_predictions,preprocess_input
-from tensorflow import glorot_uniform_initializer
+# from keras import decode_predictions,preprocess_input
 from datetime import datetime
 import io
 from flask import Flask,Blueprint,request,render_template,jsonify
-from modules.dataBase import collection as db
 
+def run_tflite_model(tflite_file, test_image):
+    
+    interpreter = tf.lite.Interpreter(model_path=str(tflite_file))
+    interpreter.allocate_tensors()
+    print(interpreter.get_input_details())
+    input_details = interpreter.get_input_details()[0]
+    print(input_details)
+    output_details = interpreter.get_output_details()[0]
+
+    interpreter.set_tensor(input_details["index"], test_image)
+    interpreter.invoke()
+    output = interpreter.get_tensor(output_details["index"])[0]
+    # prediction = output.argmax()
+
+    return output
 
 mod = Blueprint('backend',__name__,template_folder='templates',static_folder='./static')
 UPLOAD_URL = 'http://192.168.1.103:5000/static/'
-model = ResNet50(weights='imagenet')
-model._make_predict_function()
-
 
 @mod.route('/')
 def home():
@@ -26,10 +36,13 @@ def home():
  
     return render_template('index.html')
 
-@mod.route('/predict' ,methods=['POST'])
-def predict():  
-     if request.method == 'POST':
+@mod.route('/predict' ,methods=['POST','GET'])
+def predict(): 
+    direc = os.getcwd()
+    path = os.path.join(direc,'modules/static/2.jpg') 
+    if request.method == 'POST':
         # check if the post request has the file part
+        print(request.files)
         if 'file' not in request.files:
            return "someting went wrong 1"
       
@@ -37,37 +50,36 @@ def predict():
         temp = request.files['file']
         if user_file.filename == '':
             return "file name not found ..." 
+        user_file.save(path)
        
-        else:
-            path = os.path.join(os.getcwd()+'\\modules\\static\\'+user_file.filename)
-            user_file.save(path)
-            classes = identifyImage(path)
-            db.addNewImage(
-                user_file.filename,
-                classes[0][0][1],
-                str(classes[0][0][2]),
-                datetime.now(),
-                UPLOAD_URL+user_file.filename)
-
-            return jsonify({
-                "status":"success",
-                "prediction":classes[0][0][1],
-                "confidence":str(classes[0][0][2]),
-                "upload_time":datetime.now()
-                })
+        
+        
+    classes = identifyImage(path)
+    labels = ["Apex", "DES"]
+    jsondict = {}
+    for i in range(len(labels)):
+        jsondict[labels[i]] = str(classes[i])
+    jsondict['Prediction'] = labels[classes.argmax()]
+    print(jsondict)
+    return jsonify(jsondict)
           
 
 
 def identifyImage(img_path):
    
-    image = img.load_img(img_path,target_size=(224,224))
+    image = img.load_img(img_path)
+    w, h = image.size
+    if image.size == (1080, 1920):
+        image = image.transpose(Image.ROTATE_90)
+    image = image.resize((224,224))
     x = img_to_array(image)
     x = np.expand_dims(x, axis=0)
     # images = np.vstack([x])
-    x = preprocess_input(x)
-    preds = model.predict(x)
-    preds = decode_predictions(preds,top=1)
-    print(preds)
+    x = x / 255.
+    direc = os.getcwd()
+    path = os.path.join(direc,'modules/backed/inMap-mobile.tflite')
+    preds = run_tflite_model(path,x)
+    
     return  preds
             
 
